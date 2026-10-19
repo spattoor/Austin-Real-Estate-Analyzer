@@ -10,8 +10,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
+import os
 from pathlib import Path
 from datetime import datetime
+from src.data.sqlite_store import DEFAULT_DB, load_snapshot_frame, report as sql_report
 
 # Page config - PROFESSIONAL
 st.set_page_config(
@@ -195,13 +197,18 @@ st.markdown("""
 
 # Load data
 @st.cache_data
-def load_professional_data():
+def load_professional_data(database_mtime=None):
     """Load all data with proper error handling"""
     try:
-        # Try professional data first (with Zillow prices)
-        try:
-            df = pd.read_csv('data/processed/neighborhoods_professional.csv')
-        except:
+        # Explicit opt-in keeps the original CSV workflow unchanged.
+        if os.environ.get('AUSTIN_DATA_BACKEND') == 'sqlite':
+            df = load_snapshot_frame(Path(os.environ.get('AUSTIN_DB_PATH', DEFAULT_DB)))
+        else:
+            try:
+                df = pd.read_csv('data/processed/neighborhoods_professional.csv')
+            except FileNotFoundError:
+                df = None
+        if df is None:
             # Fallback to enhanced
             df = pd.read_csv('data/processed/neighborhoods_enhanced.csv')
             # Add missing columns with defaults
@@ -242,10 +249,21 @@ def load_professional_data():
         st.info("Please run: python analyze_neighborhoods_professional.py")
         return None, None, None, False
 
-df, sources, economic, data_loaded = load_professional_data()
+_database = Path(os.environ.get('AUSTIN_DB_PATH', DEFAULT_DB))
+_database_mtime = _database.stat().st_mtime_ns if _database.is_file() else None
+df, sources, economic, data_loaded = load_professional_data(_database_mtime)
 
 if not data_loaded:
     st.stop()
+
+_date_label = 'Last Updated'
+_display_date = datetime.now().strftime('%B %d, %Y')
+if os.environ.get('AUSTIN_DATA_BACKEND') == 'sqlite':
+    _snapshot = sql_report('rankings', _database)
+    _date_label = 'Snapshot Date'
+    _display_date = _snapshot[0]['observed_on']
+    if any(row['source_kind'] == 'synthetic' for row in _snapshot):
+        st.warning('Synthetic demonstration data. These values are not market observations.')
 
 # Professional Header
 col1, col2 = st.columns([3, 1])
@@ -257,8 +275,8 @@ with col1:
 with col2:
     st.markdown(f"""
     <div style="text-align: right; padding-top: 1rem;">
-        <div style="font-size: 0.75rem; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em;">Last Updated</div>
-        <div style="font-size: 1rem; font-weight: 600; color: #111827;">{datetime.now().strftime('%B %d, %Y')}</div>
+        <div style="font-size: 0.75rem; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em;">{_date_label}</div>
+        <div style="font-size: 1rem; font-weight: 600; color: #111827;">{_display_date}</div>
     </div>
     """, unsafe_allow_html=True)
 
