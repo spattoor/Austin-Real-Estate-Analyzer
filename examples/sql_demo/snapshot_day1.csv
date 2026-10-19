@@ -1,0 +1,4 @@
+zip_code,neighborhood_name,investment_score,median_home_value,business_count,confidence_score,cluster
+78701,Synthetic Area A,75,500000,12,70,0
+78702,Synthetic Area B,82,450000,8,60,1
+78703,Synthetic Area C,60,,0,40,0

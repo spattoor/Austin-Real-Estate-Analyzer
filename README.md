@@ -52,6 +52,20 @@ winter_project/
 
 ## 🚀 Getting Started
 
+### SQLite storage and SQL analysis
+
+The project now includes a validated SQLite import pipeline and a SQL Explorer dashboard.
+It supports repeat imports, dated snapshots, rejection logs, parameterized comparisons,
+cluster summaries, and historical changes. Start with the offline synthetic example or
+import your existing processed CSV: **[SQLite guide](SQL_GUIDE.md)**.
+
+```bash
+python sql_pipeline.py --db data/austin_demo.db import examples/sql_demo/snapshot_day1.csv --observed-on 2026-10-01 --source-kind synthetic
+python sql_pipeline.py --db data/austin_demo.db report rankings
+```
+
+The example is synthetic and is separate from the original market-data collection workflow.
+
 ### 1. Set Up Environment
 
 ```bash

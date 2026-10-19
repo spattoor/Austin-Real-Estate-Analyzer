@@ -1,0 +1,3 @@
+# Minimal dependencies for the SQL Explorer; imports/reports need only Python's stdlib.
+pandas>=2.0,<4
+streamlit>=1.50,<2
