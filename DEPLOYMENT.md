@@ -1,41 +1,55 @@
 # Deployment and verification
 
-Prepared November 1, 2026 (America/Chicago). No live URL, real Gemini response, Docker build, or AWS resource has been verified yet.
+Updated November 1, 2026 (America/Chicago).
 
-## First deployment
+Public app: https://austin-real-estate-analyzer-d5mx2bhi5grprfmjggz83b.streamlit.app/
 
-1. Push the prepared `portfolio-cloud-upgrade` branch.
-2. In Streamlit choose **Create app**, then deploy from GitHub.
-3. Repository: `spattoor/Austin-Real-Estate-Analyzer`; branch: `portfolio-cloud-upgrade`; main file: `deploy/app.py`; Python: 3.12.
-4. Deploy without secrets first. Verify tables, filters, ZIP history, source dates, methodology, and CSV download in a private browser window.
-5. Add a fresh Gemini key in app settings → Secrets, following `deploy/secrets.example.toml`. Never paste it into GitHub or chat.
-6. Ask a supported metric question and an unsupported prediction question. Download the AI verification record. Warnings do not prove actual AI inference.
-7. Save a screenshot and update the README with the actual live URL.
+## Verified AWS execution
 
-## AWS, after the demo works
+The deployed data path is:
 
-Use a Free account plan only if eligible. Inspect current service eligibility, credits and expiry. Do not upgrade to paid billing as part of these steps. S3 is not promised to be permanently free. No AWS provisioning has run.
+```text
+EventBridge weekly rule → CodeBuild → five Prefect stages → private S3
+                                                        ↓
+                                           read-only CloudFront → Streamlit
+```
 
-1. Create a private general-purpose S3 bucket in your region, keeping **Block all public access** enabled. Use default SSE-S3 encryption. Record bucket name and region.
-2. In IAM create an OIDC provider for `https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`, unless it already exists.
-3. Create a role using `deploy/aws/github-trust.template.json`, replacing `ACCOUNT_ID`. It trusts only `main`: review and merge the deployment branch before enabling it. A temporary test must explicitly trust the actual test branch.
-4. Attach `writer-policy.template.json` after replacing `BUCKET_NAME`. The role uploads raw files, snapshots and the pointer; it cannot delete objects or administer S3.
-5. Set GitHub Actions repository variables `AWS_ROLE_ARN`, `AWS_REGION`, `AUSTIN_S3_BUCKET`. Run **Refresh Austin market snapshot** manually on the trusted branch.
-6. Verify workflow logs, the raw object, hashed DB, and `latest.json`. Save the actual workflow run URL as evidence.
-7. Create a separate app reader identity with only `reader-policy.template.json`. If it uses a static key, store it exclusively in Streamlit Secrets and rotate it. GitHub's OIDC role does not authenticate Streamlit automatically.
-8. Add S3 settings to Streamlit. Verify **Private S3 snapshot**, reboot the app, and confirm restoration with the same source date and row counts. Local tests use simulated S3 and do not prove this cloud behavior.
-9. Set `ENABLE_REFRESH=true`. Monday's schedule uses UTC, runs from the default branch, may be delayed, and may be disabled after repository inactivity. Verify an actual scheduled execution separately.
+The private bucket contains the matching raw Zillow file, content-addressed SQLite snapshots, and an atomically replaced `latest.json` pointer. All four public-access blocks and SSE-S3/AES256 encryption remain enabled.
 
-## Limits and shutdown
+- A manual AWS build succeeded: `effb190c-1a4b-4044-af6f-2c9de36094a5`.
+- Eight pipeline tests passed inside CodeBuild.
+- A real EventBridge-triggered build succeeded: `e7c48c37-c967-4db1-b575-9df20e2b1581`, initiator `rule/spattoor-austin-weekly`.
+- Both runs executed the five Prefect stages, published to S3, and verified a fresh restoration with matching SHA-256 and SQLite integrity.
+- Restored data: 546 rows, 42 ZIP areas, latest observation September 30, 2026.
+- Current restored SHA-256: `613a6a05089cd51ac06043c3c11554f8c504d749603adfd46edef7e75e3e74a4`.
+- The permanent rule is enabled for Monday at 11:23 UTC. The scheduled-trigger smoke test used a temporary one-time expression on the same rule, then restored this weekly expression.
 
-Weekly refresh is bounded to a 200 MiB download. Content-addressed files avoid duplicate uploads of identical content, but source revisions add storage. Inspect S3 storage, requests, egress, credits, and expiry. Billing alerts are notifications, not hard spending caps.
+The account remained on its Free plan. No persistent AWS access keys were created. The earlier GitHub OIDC setup was denied by account policy and was not retried. The native AWS job uses scoped service roles and does not require GitHub federation.
 
-To stop cloud writes, set `ENABLE_REFRESH=false` and disable the workflow. Remove the reader key/writer role when no longer needed. Removing S3 settings restores bundled mode. Disabling automation does not remove stored objects; delete them deliberately if you want to stop storage costs.
+## App snapshot delivery
 
-Remove `GEMINI_API_KEY` from Streamlit to disable AI. Revoke the key at the provider to stop other callers too.
+`deploy/snapshot-source.json` contains the actual public CloudFront root. The manifest and published database objects are publicly readable through CloudFront; the S3 origin itself and raw source files stay private. The origin policy permits read-only access only from that specific CloudFront distribution.
 
-## Resume proof boundaries
+The app retrieves a manifest at most every five minutes, checks its schema and path, limits the database to 50 MiB, verifies SHA-256, checks SQLite integrity, and atomically caches the restored file. A new app instance can restore the current snapshot without AWS credentials. A configured cloud-delivery failure is shown as an error rather than silently serving a bundled snapshot.
 
-Local source ingestion, five Prefect stages, clustering, SQLite generation and automated dashboard checks have been exercised. Tests also cover exact-month arithmetic, missing data, AI response validation, unsupported responses, provider failure, and simulated snapshot restoration/corruption.
+The HTTPS reader has tests for valid restoration/cache reuse, corrupt data, untrusted URLs/object paths, and redirects/errors. App checks cover bundled and CloudFront source selection. These tests complement the actual anonymous HTTPS restoration exercised against the deployed distribution.
 
-Actual AI inference, hosting, S3/OIDC, a scheduled cloud run, Docker execution and restart restoration from real S3 remain unverified. The unsupported-response test is mocked; it does not establish live model behavior.
+Environment overrides:
+
+- `AUSTIN_SNAPSHOT_BASE_URL`: an HTTPS CloudFront distribution root.
+- `AUSTIN_SNAPSHOT_MODE=bundled`: explicit local bundled mode.
+- `AUSTIN_S3_BUCKET`: optional alternative direct S3 reader, requiring its own AWS identity. That alternative is not configured for the deployed app.
+
+The app uses branch `portfolio-cloud-upgrade`, entrypoint `deploy/app.py`, and Python 3.12. Existing Gemini secrets are separate from this storage deployment.
+
+## Reproduce or stop
+
+See `deploy/aws/NATIVE_REFRESH.md`, `native-refresh.template.json`, and `snapshot-delivery.template.json`. The refresh template creates a disabled rule by default. Enable it only after a verified build.
+
+To stop refresh writes, disable `spattoor-austin-weekly` in EventBridge and stop any active CodeBuild run. To use the bundled app snapshot, set `AUSTIN_SNAPSHOT_MODE=bundled` or remove the delivery configuration. Deleting the refresh stack removes its job, rule, and roles; it does not delete the existing bucket. Disable/delete CloudFront deliberately if retiring public snapshot delivery.
+
+Small CodeBuild compute has a published free allowance shared across the account. S3, logs, and other applicable usage may consume credits. Monitor the account's remaining credits and expiry. No paid-plan upgrade is required by this setup.
+
+## Proof boundaries
+
+This is **Prefect**, not Airflow. Docker container execution and the legacy GitHub OIDC publishing route are separate and were not verified by this deployment. The Zillow-only dataset in this deployment does not establish project-wide claims about seven sources or 50+ ZIP codes. AI provider verification is separate from the AWS pipeline work.

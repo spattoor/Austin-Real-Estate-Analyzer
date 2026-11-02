@@ -27,24 +27,40 @@ def setting(name, default=''):
 
 
 @st.cache_data(ttl=300)
-def cloud_snapshot(bucket):
+def cloud_snapshot(bucket='', base_url=''):
+    if base_url:
+        from portfolio.https_snapshot import restore_https
+        return str(restore_https(Path(tempfile.gettempdir()) / 'austin-snapshots', base_url))
     # boto3 reads AWS credentials from environment variables or its default credential chain.
     from portfolio.snapshot import restore
     return str(restore(Path(tempfile.gettempdir()) / 'austin-snapshots', bucket=bucket))
 
 
+config_path = ROOT / 'deploy/snapshot-source.json'
+snapshot_config = json.loads(config_path.read_text()) if config_path.exists() else {}
 bucket = setting('AUSTIN_S3_BUCKET')
+snapshot_url = setting('AUSTIN_SNAPSHOT_BASE_URL', snapshot_config.get('base_url', ''))
+if setting('AUSTIN_SNAPSHOT_MODE') == 'bundled':
+    bucket, snapshot_url = '', ''
 for name in ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_DEFAULT_REGION']:
     value = setting(name)
     if value:
         os.environ[name] = value
 try:
-    database = Path(cloud_snapshot(bucket)) if bucket else Path(setting('AUSTIN_DB_PATH', str(ROOT/'deploy/data/austin.db')))
+    if bucket:
+        database = Path(cloud_snapshot(bucket=bucket))
+        snapshot_source = 'Private S3 snapshot'
+    elif snapshot_url:
+        database = Path(cloud_snapshot(base_url=snapshot_url))
+        snapshot_source = 'AWS S3 snapshot via CloudFront'
+    else:
+        database = Path(setting('AUSTIN_DB_PATH', str(ROOT/'deploy/data/austin.db')))
+        snapshot_source = 'Bundled snapshot'
     with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as con:
         frame = pd.read_sql_query('SELECT * FROM market_observations', con)
         metadata = json.loads(con.execute('SELECT json FROM snapshot_metadata').fetchone()[0])
 except Exception:
-    st.error('A published snapshot could not be loaded. Run the refresh command or check the private S3 reader configuration.')
+    st.error('A published snapshot could not be loaded. Check the snapshot publication and delivery configuration.')
     st.stop()
 
 st.caption('AUSTIN, TEXAS · HOUSING DATA PORTFOLIO')
@@ -68,7 +84,7 @@ a.metric('ZIP areas in snapshot', latest.zip_code.nunique())
 b.metric('Median typical home value', f'${latest.zhvi.median():,.0f}')
 c.metric('Median 1-year value change', f'{latest.change_1y_pct.median():+.2f}%')
 st.caption(f'Source observation: {month} · Retrieved: {metadata.get("retrieved_at", "unknown")} · '
-           + ('Private S3 snapshot' if bucket else 'Bundled snapshot'))
+           + snapshot_source)
 if (date.today() - date.fromisoformat(month)).days > 90:
     st.warning('This source observation is more than 90 days old. Check the refresh pipeline before using it as a current comparison.')
 
@@ -132,3 +148,4 @@ with provenance:
     st.json(metadata)
     st.write('Available source months:', ', '.join(dates))
     st.markdown('[View source code](https://github.com/spattoor/Austin-Real-Estate-Analyzer)')
+

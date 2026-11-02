@@ -14,7 +14,9 @@ A portfolio research dashboard comparing Austin ZIP areas with public Zillow hom
 - Calculate a documented heuristic: 40% lower-price percentile, 35% 1-year-change percentile, 25% 3-year-change percentile.
 - Run scikit-learn K-Means on standardized values and historical changes. Cluster IDs have no quality order and are local to each month.
 - Optionally call Gemini to select relevant evidence IDs. Python validates those IDs and renders exact facts. A fallback is never labeled as AI.
-- Include five Prefect stages, a Dockerfile, a manual/scheduled GitHub Actions workflow, and optional private S3 publication/restoration code. Files alone do not establish cloud execution.
+- Run the five Prefect stages inside AWS CodeBuild, triggered weekly by EventBridge. Both a manual run and a real scheduled-trigger run passed, including private S3 publication and fresh restoration.
+- Serve the public market snapshot to Streamlit through HTTPS CloudFront with a private S3 origin. No AWS keys are required in the app.
+- Keep the Dockerfile and legacy GitHub Actions workflow available separately; their execution is not established by the native AWS run.
 
 ZHVI is a modeled typical home-value index, not a listing or median transaction price. Scores describe data; they do not predict returns or recommend purchases. The original Yelp scripts remain available as a separate older analysis path. This demo does not claim seven verified sources or predictive accuracy.
 
@@ -63,7 +65,9 @@ flowchart LR
 | `AUSTIN_DB_PATH` | No | Local published SQLite path |
 | `AUSTIN_S3_BUCKET` | S3 only | Private bucket containing `latest.json` |
 | `AWS_DEFAULT_REGION` | S3 only | Bucket region |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Hosted S3 reader only | Restricted read-only app identity; GitHub uses OIDC |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Optional direct S3 reader only | Not used by the configured CloudFront delivery path |
+| `AUSTIN_SNAPSHOT_BASE_URL` | Optional | Overrides the public CloudFront root configured in `deploy/snapshot-source.json` |
+| `AUSTIN_SNAPSHOT_MODE` | Optional | Set `bundled` to explicitly use the included local snapshot |
 
 In Streamlit Community Cloud choose `deploy/app.py` and Python 3.12. Add secrets through Advanced settings → Secrets using `deploy/secrets.example.toml`. Streamlit installs the requirements file beside the entrypoint.
 
@@ -90,3 +94,16 @@ Never bake secrets into the image. The image runs the dashboard; refresh tooling
 | Workflow ran but app stayed unchanged | Artifacts do not publish to Streamlit; use S3 or update the bundled DB |
 
 Data attribution: [Zillow Research](https://www.zillow.com/research/data/). Setup and verification status: [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Verified AWS refresh
+
+The deployed path is EventBridge → CodeBuild/Prefect → private S3 → CloudFront → Streamlit. The Monday rule uses `cron(23 11 ? * MON *)` (UTC). The current snapshot contains 546 rows across 42 ZIP areas, with observations through September 30, 2026.
+
+- Manual AWS run: `effb190c-1a4b-4044-af6f-2c9de36094a5` — succeeded; eight pipeline tests passed.
+- EventBridge-triggered AWS run: `e7c48c37-c967-4db1-b575-9df20e2b1581` — succeeded; initiator `rule/spattoor-austin-weekly`.
+- Restored database checksum: `613a6a05089cd51ac06043c3c11554f8c504d749603adfd46edef7e75e3e74a4`.
+
+The public delivery path exposes only the manifest and published snapshot objects. Raw source files remain private. S3 public-access blocks and AES256 encryption remain enabled. No account upgrade or static AWS credentials were needed.
+
+See [native refresh deployment](deploy/aws/NATIVE_REFRESH.md) and [deployment verification](DEPLOYMENT.md). This pipeline uses **Prefect**, not Airflow.
+
