@@ -2,9 +2,9 @@
 
 A portfolio research dashboard comparing Austin ZIP areas with public Zillow home-value data, transparent Python scores, K-Means clusters, and optional Gemini evidence selection.
 
-**Live demo:** pending deployment — replace with the verified Streamlit URL.
+**Live demo:** [Austin Market Explorer](https://austin-real-estate-analyzer-d5mx2bhi5grprfmjggz83b.streamlit.app/)
 
-**Screenshot:** save a deployed screenshot to `docs/screenshot.png`, then add `![Austin Market Explorer](docs/screenshot.png)` here. No screenshot or deployment is claimed yet.
+![Austin Market Explorer](docs/screenshot.png)
 
 ## What works in this deployment path
 

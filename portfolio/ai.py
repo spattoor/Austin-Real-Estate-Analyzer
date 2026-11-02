@@ -68,12 +68,13 @@ def explain(row, question='Explain the comparison score', api_key=None, model=No
         while _calls and _calls[0] < now - 86400:
             _calls.popleft()
         # Per-process bounds; provider quotas and a free-only project are separate controls.
-        if len(_calls) >= 20 or sum(t > now - 60 for t in _calls) >= 3:
-            raise AIUnavailable('Demo AI request limit reached. Please use the fact cards below.')
+        if len(_calls) >= 20:
+            raise AIUnavailable('Daily demo AI limit reached. Verified facts remain available.')
+        recent = [t for t in _calls if t > now - 60]
+        if len(recent) >= 3:
+            wait = max(1, int(recent[0] + 60 - now) + 1)
+            raise AIUnavailable(f'Demo AI rate limit reached. Try again in {wait} seconds.')
         _calls.append(now)
-    schema = {'type': 'OBJECT', 'properties': {'supported': {'type': 'BOOLEAN'},
-              'metric_ids': {'type': 'ARRAY', 'items': {'type': 'STRING', 'enum': list(facts)}}},
-              'required': ['supported', 'metric_ids']}
     payload = {
         'systemInstruction': {'parts': [{'text':
             'Select up to five supplied metric IDs to explain the user question. '
@@ -87,13 +88,21 @@ def explain(row, question='Explain the comparison score', api_key=None, model=No
             'question': question, 'facts': facts, 'observed_on': row['observed_on'],
             'source_id': row['source_id'], 'scoring': '40% lower-price rank + 35% 1y change rank + 25% 3y change rank'})}]}],
         'generationConfig': {'temperature': 0, 'maxOutputTokens': 512,
-                             'responseMimeType': 'application/json', 'responseSchema': schema},
+                             'responseMimeType': 'application/json'},
     }
     try:
         response = requests.post(
             f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
             headers={'x-goog-api-key': api_key}, json=payload, timeout=(5, 25))
         if response.status_code != 200:
+            if response.status_code == 400:
+                try:
+                    error = response.json().get('error', {})
+                    reasons = [d.get('reason') for d in error.get('details', [])]
+                    if 'API_KEY_INVALID' in reasons or 'API key not valid' in str(error.get('message', '')):
+                        raise AIUnavailable('Google rejected the configured API key. Replace GEMINI_API_KEY in Streamlit Secrets with the working private key.')
+                except (ValueError, AttributeError, TypeError):
+                    pass
             raise AIUnavailable(f'AI provider unavailable (HTTP {response.status_code}). No AI answer was generated.')
         if len(response.content) > 64000:
             raise AIUnavailable('AI response exceeded the size limit.')

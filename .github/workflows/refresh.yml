@@ -32,6 +32,20 @@ jobs:
         run: python -m portfolio.refresh
       - name: Test pipeline, AI boundary, restoration, and dashboard
         run: python -m unittest discover -s tests -p test_portfolio.py -v
+      - name: Build and exercise the actual Docker container
+        run: |
+          docker build -t austin-market:ci .
+          docker run -d --name austin-ci -p 8501:8501 austin-market:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8501/_stcore/health; then
+              docker rm -f austin-ci
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs austin-ci
+          docker rm -f austin-ci
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: austin-market-snapshot
