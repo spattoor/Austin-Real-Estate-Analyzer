@@ -1,5 +1,9 @@
 # Environment
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.venv/
 venv/
 env/
 ENV/
@@ -24,6 +28,8 @@ data/processed/*
 *.json
 *.xlsx
 *.db
+!deploy/data/austin.db
+!deploy/aws/*.json
 
 # Outputs
 outputs/figures/*

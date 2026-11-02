@@ -1,128 +1,92 @@
-# 🏙️ Austin Real Estate Investment Finder
+# Austin Market Explorer
 
-**A professional, data-driven tool for identifying high-potential real estate investment opportunities in Austin, Texas**
+A portfolio research dashboard comparing Austin ZIP areas with public Zillow home-value data, transparent Python scores, K-Means clusters, and optional Gemini evidence selection.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**Live demo:** pending deployment — replace with the verified Streamlit URL.
 
-## 🎯 Project Overview
+**Screenshot:** save a deployed screenshot to `docs/screenshot.png`, then add `![Austin Market Explorer](docs/screenshot.png)` here. No screenshot or deployment is claimed yet.
 
-This is an investor-grade analysis platform that identifies the best neighborhoods in Austin for real estate investment using:
+## What works in this deployment path
 
-- **Real-Time Data** from 7+ verified sources (Yelp, Austin Open Data, Zillow, FRED, etc.)
-- **70+ Advanced Features** including economic indicators, crime stats, permits, walkability, and job growth
-- **Professional Scoring System** with confidence levels and transparent methodology
-- **Interactive Dashboard** with maps, charts, and filterable rankings
-- **Historical Validation** showing 80% accuracy on past hot neighborhoods
+- Download the public Zillow ZIP-level, smoothed, seasonally adjusted ZHVI dataset.
+- Select rows with `State=TX` and `City=Austin`; preserve 13 monthly analysis snapshots in SQLite.
+- Compute exact 1-year and 3-year historical changes. Missing observations remain null.
+- Calculate a documented heuristic: 40% lower-price percentile, 35% 1-year-change percentile, 25% 3-year-change percentile.
+- Run scikit-learn K-Means on standardized values and historical changes. Cluster IDs have no quality order and are local to each month.
+- Optionally call Gemini to select relevant evidence IDs. Python validates those IDs and renders exact facts. A fallback is never labeled as AI.
+- Include five Prefect stages, a Dockerfile, a manual/scheduled GitHub Actions workflow, and optional private S3 publication/restoration code. Files alone do not establish cloud execution.
 
-## 🛠️ Tech Stack
+ZHVI is a modeled typical home-value index, not a listing or median transaction price. Scores describe data; they do not predict returns or recommend purchases. The original Yelp scripts remain available as a separate older analysis path. This demo does not claim seven verified sources or predictive accuracy.
 
-- **Data Collection**: Python (requests, BeautifulSoup, APIs)
-- **Data Processing**: Pandas, NumPy
-- **Machine Learning**: Scikit-learn (Clustering, Regression)
-- **Geospatial Analysis**: GeoPandas, Folium, Kepler.gl
-- **Visualization**: Plotly, Matplotlib, Seaborn
+## Run locally
 
-## 📁 Project Structure
-
-```
-winter_project/
-├── data/
-│   ├── raw/              # Raw data from APIs and scraping
-│   ├── processed/        # Cleaned and transformed data
-│   └── external/         # Reference data (zip codes, boundaries)
-├── notebooks/
-│   ├── 01_data_collection.ipynb
-│   ├── 02_data_cleaning.ipynb
-│   ├── 03_feature_engineering.ipynb
-│   ├── 04_analysis.ipynb
-│   └── 05_visualization.ipynb
-├── src/
-│   ├── data/            # Data collection scripts
-│   ├── features/        # Feature engineering
-│   ├── models/          # ML models
-│   └── visualization/   # Plotting functions
-├── outputs/
-│   ├── figures/         # Generated plots
-│   └── maps/            # Interactive maps
-├── requirements.txt
-├── .env.example
-└── README.md
-```
-
-## 🚀 Getting Started
-
-### SQLite storage and SQL analysis
-
-The project now includes a validated SQLite import pipeline and a SQL Explorer dashboard.
-It supports repeat imports, dated snapshots, rejection logs, parameterized comparisons,
-cluster summaries, and historical changes. Start with the offline synthetic example or
-import your existing processed CSV: **[SQLite guide](SQL_GUIDE.md)**.
+Use Python 3.12:
 
 ```bash
-python sql_pipeline.py --db data/austin_demo.db import examples/sql_demo/snapshot_day1.csv --observed-on 2026-10-01 --source-kind synthetic
-python sql_pipeline.py --db data/austin_demo.db report rankings
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r deploy/requirements.txt
+python -m streamlit run deploy/app.py
 ```
 
-The example is synthetic and is separate from the original market-data collection workflow.
+Open the local URL shown by Streamlit. The bundled SQLite snapshot needs no account or API key. Source dates and retrieval time appear in the app.
 
-### 1. Set Up Environment
+## Refresh and verify
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+python -m pip install -r requirements-cloud.txt
+PREFECT_SERVER_ANALYTICS_ENABLED=false python -m portfolio.refresh
+python -m unittest discover -s tests -v
 ```
 
-### 2. Configure API Keys
+The flow runs `ingest → clean → features → score → load`, failing on source errors. Output: `deploy/data/austin.db`. Raw downloads under `data/raw/portfolio/` are ignored. A GitHub artifact alone does not update the app: configure S3 publication or commit a refreshed bundled snapshot.
 
-Copy `.env.example` to `.env` and add your API keys:
-- Yelp API
-- Google Places API (optional)
-- Census API (optional)
+## Architecture
 
-### 3. Run the Notebooks
+```mermaid
+flowchart LR
+  Z[Zillow public CSV] --> P[Prefect: ingest, clean, features, score, load]
+  P --> D[SQLite snapshot]
+  P -. optional publication .-> S[Private S3 raw files and snapshots]
+  D --> U[Streamlit read-only dashboard]
+  S -. verified download .-> U
+  U --> G[Server-side Gemini evidence selection]
+  G --> V[Validate IDs and render supplied facts]
+```
 
-Start with `notebooks/01_data_collection.ipynb` and work through each notebook in order.
+## Environment variables and secrets
 
-## 📊 Key Features
+| Variable | Required | Purpose |
+|---|---|---|
+| `GEMINI_API_KEY` | AI only | Fresh server-side key; never commit |
+| `GEMINI_MODEL` | No | Default `gemini-3.5-flash-lite`; verify project access |
+| `AUSTIN_DB_PATH` | No | Local published SQLite path |
+| `AUSTIN_S3_BUCKET` | S3 only | Private bucket containing `latest.json` |
+| `AWS_DEFAULT_REGION` | S3 only | Bucket region |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Hosted S3 reader only | Restricted read-only app identity; GitHub uses OIDC |
 
-### The "Hipster Index"
-Custom metric combining:
-- Number of specialty coffee shops
-- Craft breweries
-- Average Yelp ratings
-- Vegan/organic restaurants
+In Streamlit Community Cloud choose `deploy/app.py` and Python 3.12. Add secrets through Advanced settings → Secrets using `deploy/secrets.example.toml`. Streamlit installs the requirements file beside the entrypoint.
 
-### Predictive Models
-- **K-Means Clustering**: Group neighborhoods into categories
-- **Time-Lag Analysis**: Correlate amenity growth with housing price increases
-- **Anomaly Detection**: Find undervalued neighborhoods
+AI limits: three uncached calls/minute and twenty/24 hours per server process; successful responses cache for an hour. Restarts reset these controls. They are not provider spending caps. Use a free-only Gemini project without paid billing and inspect quotas. Only public housing facts are sent to the provider.
 
-### Interactive Visualizations
-- 3D heatmaps of housing prices
-- Bubble maps showing the "Hipster Index"
-- Time-series animations of neighborhood evolution
+## Docker
 
-## 📈 Results
+```bash
+docker build -t austin-market .
+docker run --rm -p 8501:8501 austin-market
+```
 
-*(Will be updated as we progress)*
+Never bake secrets into the image. The image runs the dashboard; refresh tooling runs separately with `requirements-cloud.txt`.
 
-## 🔮 Future Improvements
+## Common failures
 
-- Real-time data pipeline
-- Web dashboard (Streamlit/Dash)
-- Additional data sources (Walkability scores, School ratings)
-- Deep learning models for prediction
+| Symptom | Action |
+|---|---|
+| Missing snapshot | Run the refresh and commit the generated DB for bundled hosting |
+| Wrong Streamlit dependencies | Set the entrypoint to exactly `deploy/app.py` |
+| AI 400/404 | Confirm model access in the fresh project; do not select an old model blindly |
+| AI 429 | Check quota and app limits; comparison tables still work |
+| S3 access denied | Check bucket region, reader policy, and OIDC branch trust |
+| Workflow ran but app stayed unchanged | Artifacts do not publish to Streamlit; use S3 or update the bundled DB |
 
-## 📝 License
-
-MIT License
-
----
-
-**Author**: Sai Abhinav Pattoor  
-**Date**: December 2025
+Data attribution: [Zillow Research](https://www.zillow.com/research/data/). Setup and verification status: [DEPLOYMENT.md](DEPLOYMENT.md).
