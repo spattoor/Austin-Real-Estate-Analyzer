@@ -1,0 +1,245 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Private Austin snapshot refresh. Weekly small CodeBuild job, existing S3 bucket, no static keys.",
+  "Resources": {
+    "BuildLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/codebuild/spattoor-austin-refresh",
+        "RetentionInDays": 7
+      }
+    },
+    "BuildRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "spattoor-austin-refresh-service",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "codebuild.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Fn::Sub": "${AWS::AccountId}"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/spattoor-austin-refresh"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "AustinSnapshotAndLogs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${DataBucket}/raw/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${DataBucket}/snapshots/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:s3:::${DataBucket}/latest.json"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetBucketLocation"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:s3:::${DataBucket}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/spattoor-austin-refresh:*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "RefreshProject": {
+      "Type": "AWS::CodeBuild::Project",
+      "Properties": {
+        "Name": "spattoor-austin-refresh",
+        "Description": "Weekly Austin ETL to encrypted private S3 with verified restoration",
+        "ServiceRole": {
+          "Fn::GetAtt": [
+            "BuildRole",
+            "Arn"
+          ]
+        },
+        "Artifacts": {
+          "Type": "NO_ARTIFACTS"
+        },
+        "Source": {
+          "Type": "GITHUB",
+          "Location": "https://github.com/spattoor/Austin-Real-Estate-Analyzer.git",
+          "GitCloneDepth": 1,
+          "BuildSpec": "version: 0.2\nphases:\n  install:\n    runtime-versions:\n      python: 3.12\n    commands:\n      - python -m pip install --disable-pip-version-check -r requirements-cloud.txt\n  pre_build:\n    commands:\n      - python -m unittest discover -s tests -p test_portfolio.py -v\n  build:\n    commands:\n      - python -m portfolio.refresh --publish-s3\n      - >-\n        python -c \"from pathlib import Path; import sqlite3; from portfolio.snapshot import restore,digest;\n        p=restore(Path('/tmp/austin-restored'));\n        assert digest(p)==digest(Path('deploy/data/austin.db'));\n        c=sqlite3.connect(p); assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok';\n        print('S3_RESTORE_VERIFIED',c.execute('SELECT count(*),count(distinct zip_code),max(observed_on) FROM market_observations').fetchone())\"\n",
+          "ReportBuildStatus": false
+        },
+        "SourceVersion": {
+          "Ref": "SourceRevision"
+        },
+        "Environment": {
+          "Type": "LINUX_CONTAINER",
+          "ComputeType": "BUILD_GENERAL1_SMALL",
+          "Image": "aws/codebuild/standard:7.0",
+          "PrivilegedMode": false,
+          "EnvironmentVariables": [
+            {
+              "Name": "AUSTIN_S3_BUCKET",
+              "Value": {
+                "Ref": "DataBucket"
+              }
+            },
+            {
+              "Name": "PREFECT_SERVER_ANALYTICS_ENABLED",
+              "Value": "false"
+            }
+          ]
+        },
+        "TimeoutInMinutes": 10,
+        "QueuedTimeoutInMinutes": 10,
+        "ConcurrentBuildLimit": 1,
+        "LogsConfig": {
+          "CloudWatchLogs": {
+            "Status": "ENABLED",
+            "GroupName": {
+              "Ref": "BuildLogGroup"
+            }
+          }
+        }
+      }
+    },
+    "ScheduleRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "spattoor-austin-refresh-schedule",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Fn::Sub": "${AWS::AccountId}"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/spattoor-austin-weekly"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "StartOnlyAustinRefresh",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "codebuild:StartBuild",
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/spattoor-austin-refresh"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WeeklyRefresh": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Name": "spattoor-austin-weekly",
+        "ScheduleExpression": "cron(23 11 ? * MON *)",
+        "State": "DISABLED",
+        "Description": "Weekly Austin ETL; enabled only after a successful manual build",
+        "Targets": [
+          {
+            "Id": "AustinRefresh",
+            "Arn": {
+              "Fn::GetAtt": [
+                "RefreshProject",
+                "Arn"
+              ]
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "ScheduleRole",
+                "Arn"
+              ]
+            },
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 0,
+              "MaximumEventAgeInSeconds": 3600
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ProjectName": {
+      "Value": {
+        "Ref": "RefreshProject"
+      }
+    },
+    "ScheduleName": {
+      "Value": {
+        "Ref": "WeeklyRefresh"
+      }
+    }
+  },
+  "Parameters": {
+    "DataBucket": {
+      "Type": "String",
+      "Description": "Existing private S3 bucket for Austin raw data and snapshots."
+    },
+    "SourceRevision": {
+      "Type": "String",
+      "Default": "4fedd6f56dc912cbf9d69bcf3426549c8e83d817",
+      "Description": "Reviewed GitHub commit SHA to execute; update only after reviewing code."
+    }
+  }
+}
